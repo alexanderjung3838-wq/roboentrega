@@ -13,14 +13,13 @@ const CLIENT_SECRET = process.env.ML_CLIENT_SECRET ? process.env.ML_CLIENT_SECRE
 const REDIRECT_URI = process.env.ML_REDIRECT_URI ? process.env.ML_REDIRECT_URI.trim() : '';
 
 // --- CONEXÃO MONGODB ---
-// Conecta ao banco de dados usando a variável MONGO_URI
 mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log('✅ Conectado ao MongoDB'))
     .catch(err => console.error('❌ Erro no MongoDB:', err));
 
-// Cria o "Molde" dos dados (Schema)
+// Schema do Token
 const TokenSchema = new mongoose.Schema({
-    _id: String, // Vamos usar um ID fixo 'bot_auth'
+    _id: String,
     access_token: String,
     refresh_token: String,
     expires_in: Number,
@@ -28,23 +27,19 @@ const TokenSchema = new mongoose.Schema({
 });
 const TokenModel = mongoose.model('Token', TokenSchema);
 
-// --- GERENCIAMENTO DE TOKENS (VIA BANCO DE DADOS) ---
-
+// --- GERENCIAMENTO DE TOKENS ---
 async function saveTokens(tokens) {
     const data = { 
         ...tokens, 
         saved_at: Date.now(),
-        _id: 'bot_auth' // ID fixo para sempre atualizar o mesmo
+        _id: 'bot_auth'
     };
-    // Salva ou Atualiza (Upsert)
     await TokenModel.findByIdAndUpdate('bot_auth', data, { upsert: true });
     console.log('💾 Tokens salvos no Banco de Dados.');
 }
 
 async function getAccessToken() {
-    // Busca no banco
     let tokens = await TokenModel.findById('bot_auth');
-
     if (!tokens) throw new Error("Sem token. Faça login em /auth");
 
     const agora = Date.now();
@@ -73,9 +68,8 @@ async function getAccessToken() {
 }
 
 // --- ROTAS ---
-
 app.get('/', (req, res) => {
-    res.send('O Robô Refrigerista está ONLINE! 🚀');
+    res.send('O Robô Vendedor está ONLINE e pronto para vender! 🚀');
 });
 
 app.get('/auth', (req, res) => {
@@ -98,7 +92,7 @@ app.get('/callback', async (req, res) => {
         });
         
         await saveTokens(response.data);
-        res.send('<h1>SUCESSO!</h1> <p>Robô autenticado no MongoDB. Pode fechar.</p>');
+        res.send('<h1>SUCESSO!</h1> <p>Robô autenticado no MongoDB. Pode fechar esta janela.</p>');
     } catch (error) {
         res.status(500).send('Erro: ' + JSON.stringify(error.response?.data));
     }
@@ -112,7 +106,7 @@ app.post('/notifications', async (req, res) => {
     }
 });
 
-// --- LÓGICA DE ENVIO ---
+// --- LÓGICA DE ENVIO INTELIGENTE (CATÁLOGO) ---
 async function processarVenda(resourceUri) {
     try {
         const token = await getAccessToken();
@@ -121,34 +115,75 @@ async function processarVenda(resourceUri) {
         });
         const order = orderResponse.data;
 
-        if (order.status !== 'paid') return;
+        if (order.status !== 'paid') {
+            console.log(`Venda ${order.id} ignorada: Status é ${order.status}`);
+            return;
+        }
 
-        console.log(`💰 Venda Paga: ${order.id}`);
+        console.log(`💰 Venda Paga detectada! ID da Venda: ${order.id}`);
+
+        // 1. Identifica o produto vendido
+        const itemVendido = order.order_items[0].item;
+        const mlbId = itemVendido.id; // Aqui vem o ID (Ex: MLBU1425061106)
+        const tituloItem = itemVendido.title;
+
+        console.log(`📦 Produto: ${tituloItem} | ID: ${mlbId}`);
 
         const packId = order.pack_id || order.id;
         const buyerId = order.buyer.id;
         const sellerId = order.seller.id;
 
-        // SEU TEXTO DE VENDA AQUI
-        const mensagem = `Olá! Obrigado por adquirir o Refrigerista Pro 🚀
-        
-Link: https://seusistema.com/download
-Licença: ${Math.floor(Math.random() * 1000000)}
+        // ============================================================
+        // CATÁLOGO DE MENSAGENS
+        // ============================================================
+        let mensagemTexto = "";
+
+        // CASO 1: SEU PRODUTO ESPECÍFICO (ID MLBU1425061106)
+        if (mlbId === 'MLBU1425061106') {
+            mensagemTexto = `Olá! Muito obrigado pela compra do Sistema! 🚀
+
+O seu acesso já está liberado.
+
+⬇️ LINK PARA DOWNLOAD:
+
+Link do produto
+https://drive.google.com/file/d/1fUhg46DIUvUT_UUQKRyTwZCifVS3JHK8/view?usp=sharing
+
+Link do passo a passo
+https://drive.google.com/file/d/1bj_L0_4ZNRVEcHit9mRjeBnfjoYO118d/view?usp=drive_link
+
+🔑 SUA CHAVE DE LICENÇA:
+SISTEMA-
+
+❓ Dúvidas?
+Se precisar de suporte, basta responder esta mensagem.
 
 Att, Alexander Jung.`;
 
+        } 
+        // CASO 2: OUTROS PRODUTOS (Padrão)
+        else {
+            mensagemTexto = `Olá! Obrigado pela compra do produto: ${tituloItem}.
+Já recebemos seu pedido e logo entraremos em contato para fazer a entrega!
+
+Att, Alexander Jung.`;
+        }
+        // ============================================================
+
+        // Envia a mensagem escolhida
         await axios.post(`https://api.mercadolibre.com/messages/packs/${packId}/sellers/${sellerId}?access_token=${token}`, {
             from: { user_id: sellerId },
             to: { user_id: buyerId },
-            text: mensagem
+            text: mensagemTexto
         }, { headers: { 'Content-Type': 'application/json' }});
         
-        console.log('✅ Mensagem enviada!');
+        console.log(`✅ Mensagem enviada para o comprador do item ${mlbId}!`);
+
     } catch (error) {
-        console.error('Erro:', error.response?.data || error.message);
+        console.error('❌ Erro no processamento:', error.response?.data || error.message);
     }
 }
 
 app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
+    console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
